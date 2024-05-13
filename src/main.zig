@@ -9,10 +9,18 @@ var bw = std.io.bufferedWriter(stdout_file);
 const stdout_file = std.io.getStdOut().writer();
 
 const width: u8 = 100;
-const height: u8 = 50;
+const height: u8 = 100;
 
 var list: [height][width]f32 = undefined;
+var diff_list: [height][width]f32 = undefined;
 const levels: []const u8 = " ._=coaA@#";
+const alpha = 0.028;
+// const alpha_m = 0.147;
+const b1: f32 = 0.278;
+const b2: f32 = 0.365;
+const d1: f32 = 0.267;
+const d2: f32 = 0.445;
+const dt: f32 = 0.05;
 
 const ra: i16 = 21;
 
@@ -24,24 +32,77 @@ fn random_grid() !void {
     });
 
     for (0..height) |y| {
-        for (0..width) |x| {
+        for (0..width / 3) |x| {
             list[y][x] = rnd.random().float(f32);
         }
     }
 }
 
-fn display_grid() !void {
-    for (0..height) |y| {
-        for (0..width) |x| {
-            const c = levels[@as(usize, @intFromFloat(list[y][x] * (levels.len)))];
-            try stdout.print("{c}", .{c});
+fn display_grid(comptime H: usize, comptime W: usize, array_2d: [H][W]f32) !void {
+    for (0..H) |y| {
+        for (0..W) |x| {
+            const c = levels[@as(usize, @intFromFloat(array_2d[y][x] * (levels.len)))];
+            try stdout.print("{c}{c}", .{ c, c });
         }
         try stdout.print("{s}", .{"\n"});
     }
+    try bw.flush();
 }
 
 fn emod(a: i16, b: i16) i16 {
     return @mod(@mod(a, b + b), b);
+}
+
+fn sigma_1(x: f32, a: f32) f32 {
+    return 1 / (1.0 + math.exp(-(x - a) * 4 / alpha));
+}
+
+fn sigma_2(x: f32, a: f32, b: f32) f32 {
+    return sigma_1(x, a) * (1 - sigma_1(x, b));
+}
+
+fn sigma_m(x: f32, y: f32, m: f32) f32 {
+    return x * (1 - sigma_1(m, 0.5)) + y * sigma_1(m, 0.5);
+}
+
+fn s(n: f32, m: f32) f32 {
+    return sigma_2(n, sigma_m(b1, d1, m), sigma_m(b2, d2, m));
+}
+
+fn compute_grid_diff() void {
+    var cy: i16 = 0;
+    while (cy < height) : (cy += 1) {
+        var cx: i16 = 0;
+        while (cx < width) : (cx += 1) {
+            var m: f32 = 0;
+            var M: f32 = 0;
+            var n: f32 = 0;
+            var N: f32 = 0;
+            const ri: f32 = ra / 3;
+
+            var dy: i16 = -(ra - 1);
+            while (dy < ra) : (dy += 1) {
+                var dx: i16 = -(ra - 1);
+                while (dx < ra) : (dx += 1) {
+                    const x: usize = @as(usize, @intCast(emod(cx + dx, width)));
+                    const y: usize = @as(usize, @intCast(emod(cy + dy, height)));
+
+                    if (dx * dx + dy * dy <= ri * ri) {
+                        m += list[y][x];
+                        M += 1;
+                    } else if (dx * dx + dy * dy <= ra * ra) {
+                        n += list[y][x];
+                        N += 1;
+                    }
+                }
+            }
+            n /= N;
+            m /= M;
+
+            const q: f32 = s(n, m);
+            diff_list[@as(usize, @intCast(cy))][@as(usize, @intCast(cx))] = (2 * q) - 1;
+        }
+    }
 }
 
 pub fn main() !void {
@@ -53,34 +114,23 @@ pub fn main() !void {
 
     try random_grid();
 
-    const cx: i16 = 0;
-    const cy: i16 = 0;
-    var m: f32 = 0;
-    var M: f32 = 0;
-    var n: f32 = 0;
-    var N: f32 = 0;
-    const ri: f32 = ra / 3;
+    // print("\nm = {d}, n = {d}, s(n, m) = {d}\n", .{ m, n, s(n, m) });
 
-    var dy: i16 = -(ra - 1);
-    while (dy < ra) : (dy += 1) {
-        var dx: i16 = -(ra - 1);
-        while (dx < ra) : (dx += 1) {
-            const x: usize = @as(usize, @intCast(emod(cx + dx, width)));
-            const y: usize = @as(usize, @intCast(emod(cy + dy, height)));
+    try display_grid(height, width, list);
 
-            if (dx * dx + dy * dy <= ri * ri) {
-                m += list[y][x];
-                M += 1;
-            } else if (dx * dx + dy * dy <= ra * ra) {
-                n += list[y][x];
-                N += 1;
+    while (true) {
+        compute_grid_diff();
+
+        for (0..height) |y| {
+            for (0..width) |x| {
+                list[y][x] += dt * diff_list[y][x];
+                list[y][x] = math.clamp(list[y][x], 0.0, 0.999);
             }
         }
+
+        print("\n", .{});
+        try display_grid(height, width, list);
     }
-    n /= N;
-    m /= M;
-    print("\nm = {d}, n = {d}\n", .{ m, n });
-    // try display_grid();
 
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     // std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
